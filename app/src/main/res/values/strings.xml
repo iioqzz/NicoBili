@@ -1,0 +1,21 @@
+<resources>
+    <string name="app_name">NicoBili</string>
+    <string name="nav_home">首页</string>
+    <string name="nav_live">生放送</string>
+    <string name="nav_downloads">下载</string>
+    <string name="nav_profile">我的</string>
+    <string name="search_hint">搜索视频、生放送、标签或UP主</string>
+    <string name="tab_live">直播</string>
+    <string name="tab_recommend">推荐</string>
+    <string name="tab_anime">动画</string>
+    <string name="tab_music">音乐</string>
+    <string name="tab_game">游戏</string>
+    <string name="tab_vocaloid">VOCALOID</string>
+    <string name="tab_ranking">排行榜</string>
+    <string name="send_danmaku_hint">点我发弹幕</string>
+    <string name="danmaku_filter_title">弹幕过滤与设置</string>
+    <string name="quality_select_title">选择清晰度</string>
+    <string name="background_play_active">正在后台播放</string>
+    <string name="login_official">登录ニコニコ官方账号</string>
+    <string name="sync_now">同步收藏夹与历史记录</string>
+</resources>

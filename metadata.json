@@ -1,0 +1,6 @@
+{
+  "name": "NicoBili",
+  "description": "Ad-free Bilibili-style Android client for NicoNico Douga & NicoNico Live with real-time danmaku, filtering, offline downloads, background playback, night mode, multi-quality switching, and official account sync.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
