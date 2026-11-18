@@ -1030,7 +1030,7 @@ private fun NicoLiveWebPlayer(
                 settings.domStorageEnabled = true
                 settings.mediaPlaybackRequiresUserGesture = false
                 webChromeClient = WebChromeClient()
-                webViewClient = WebViewClient()
+                webViewClient = createAdBlockingWebViewClient()
                 loadUrl(liveUrl)
             }
         },

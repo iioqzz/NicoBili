@@ -189,6 +189,8 @@ fun NicoBiliApp(viewModel: NicoBiliViewModel) {
                                 isDarkTheme = isDarkTheme,
                                 onSelectCategory = { viewModel.loadCategory(it) },
                                 onSelectLatestTimeRange = { viewModel.updateLatestTimeRange(it) },
+                                onSelectCustomLatestDays = { viewModel.updateCustomLatestDays(it) },
+                                onLoadMore = { viewModel.loadMoreVideos() },
                                 onSearch = { viewModel.search(it) },
                                 onToggleDarkMode = {
                                     viewModel.setThemeMode(if (isDarkTheme) ThemeMode.LIGHT else ThemeMode.DARK)

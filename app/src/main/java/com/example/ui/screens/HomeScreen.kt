@@ -16,8 +16,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -32,12 +34,14 @@ import androidx.compose.material.icons.rounded.LightMode
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.ScrollableTabRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
@@ -45,6 +49,8 @@ import androidx.compose.material3.TabRowDefaults
 import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -58,6 +64,7 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
@@ -77,6 +84,8 @@ fun HomeScreen(
     isDarkTheme: Boolean,
     onSelectCategory: (NicoCategory) -> Unit,
     onSelectLatestTimeRange: (LatestTimeRange) -> Unit,
+    onSelectCustomLatestDays: (Int) -> Unit,
+    onLoadMore: () -> Unit,
     onSearch: (String) -> Unit,
     onToggleDarkMode: () -> Unit,
     onAvatarClick: () -> Unit,
@@ -85,6 +94,7 @@ fun HomeScreen(
     var searchText by remember { mutableStateOf(feedState.searchQuery) }
     var showTimeRangeSheet by remember { mutableStateOf(false) }
     val keyboard = LocalSoftwareKeyboardController.current
+    val gridState = rememberLazyGridState()
 
     Column(
         modifier = Modifier
@@ -250,9 +260,14 @@ fun HomeScreen(
                             modifier = Modifier.testTag("category_tab_${category.id}"),
                             text = {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
+                                    val rangeLabel = if (feedState.latestTimeRange == LatestTimeRange.CUSTOM) {
+                                        "${feedState.customLatestDays}天内"
+                                    } else {
+                                        feedState.latestTimeRange.label
+                                    }
                                     Text(
                                         text = if (isLatest && selected) {
-                                            "${category.label}·${feedState.latestTimeRange.label}"
+                                            "${category.label}·$rangeLabel"
                                         } else {
                                             category.label
                                         },
@@ -281,14 +296,31 @@ fun HomeScreen(
         }
 
         // Content Grid
-        val itemsToShow = if (feedState.selectedCategory.id == "live" && !feedState.isSearching) {
+        val isLiveTab = feedState.selectedCategory.id == "live" && !feedState.isSearching
+        val itemsToShow = if (isLiveTab) {
             feedState.livePrograms
         } else {
             feedState.videos
         }
 
+        // Trigger infinite scroll when reaching near bottom
+        val shouldLoadMore by remember(itemsToShow.size) {
+            derivedStateOf {
+                val lastVisible = gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+                itemsToShow.isNotEmpty() && lastVisible >= itemsToShow.size - 4
+            }
+        }
+        LaunchedEffect(shouldLoadMore) {
+            if (shouldLoadMore && !isLiveTab) {
+                onLoadMore()
+            }
+        }
+
         Box(modifier = Modifier.fillMaxSize()) {
             when {
+                isLiveTab && itemsToShow.isEmpty() && !feedState.isLoading -> {
+                    NicoLivePortalWebView(modifier = Modifier.fillMaxSize())
+                }
                 feedState.isLoading && itemsToShow.isEmpty() -> {
                     CircularProgressIndicator(
                         modifier = Modifier.align(Alignment.Center),
@@ -318,6 +350,7 @@ fun HomeScreen(
                 }
                 else -> {
                     LazyVerticalGrid(
+                        state = gridState,
                         columns = GridCells.Adaptive(minSize = 165.dp),
                         contentPadding = PaddingValues(8.dp),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -330,6 +363,22 @@ fun HomeScreen(
                                 onClick = { onVideoClick(video) }
                             )
                         }
+                        if (feedState.isLoadingMore) {
+                            item(span = { GridItemSpan(maxLineSpan) }) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(16.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(26.dp),
+                                        strokeWidth = 2.5.dp,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -337,6 +386,9 @@ fun HomeScreen(
     }
 
     if (showTimeRangeSheet) {
+        var customDaysText by remember { mutableStateOf(feedState.customLatestDays.toString()) }
+        var showCustomInput by remember { mutableStateOf(feedState.latestTimeRange == LatestTimeRange.CUSTOM) }
+
         ModalBottomSheet(onDismissRequest = { showTimeRangeSheet = false }) {
             Column(
                 modifier = Modifier
@@ -358,15 +410,23 @@ fun HomeScreen(
                             .clip(RoundedCornerShape(8.dp))
                             .testTag("time_range_${range.name}")
                             .clickable {
-                                onSelectLatestTimeRange(range)
-                                showTimeRangeSheet = false
+                                if (range == LatestTimeRange.CUSTOM) {
+                                    showCustomInput = true
+                                } else {
+                                    onSelectLatestTimeRange(range)
+                                    showTimeRangeSheet = false
+                                }
                             }
-                            .padding(horizontal = 12.dp, vertical = 14.dp),
+                            .padding(horizontal = 12.dp, vertical = 12.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = range.label,
+                            text = if (range == LatestTimeRange.CUSTOM && isSelected) {
+                                "手动输入（当前：${feedState.customLatestDays}天内）"
+                            } else {
+                                range.label
+                            },
                             style = MaterialTheme.typography.bodyLarge,
                             fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
                             color = if (isSelected) {
@@ -381,6 +441,40 @@ fun HomeScreen(
                                 contentDescription = "已选中",
                                 tint = MaterialTheme.colorScheme.primary
                             )
+                        }
+                    }
+                }
+
+                if (showCustomInput) {
+                    Spacer(Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = customDaysText,
+                            onValueChange = { value ->
+                                customDaysText = value.filter { it.isDigit() }.take(4)
+                            },
+                            label = { Text("输入天数（如 14、180）") },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("custom_days_input")
+                        )
+                        Button(
+                            onClick = {
+                                val days = customDaysText.toIntOrNull()
+                                if (days != null && days > 0) {
+                                    onSelectCustomLatestDays(days)
+                                    showTimeRangeSheet = false
+                                }
+                            },
+                            modifier = Modifier.testTag("custom_days_confirm")
+                        ) {
+                            Text("确定")
                         }
                     }
                 }

@@ -54,7 +54,7 @@ data class NicoVideo(
 ) {
     val shareUrl: String
         get() = if (isLive) {
-            "https://live.nicovideo.jp/watch/$contentId"
+            "https://sp.live.nicovideo.jp/watch/$contentId"
         } else {
             "https://www.nicovideo.jp/watch/$contentId"
         }
@@ -118,6 +118,8 @@ enum class LatestTimeRange(val label: String, val days: Int?) {
     LAST_3_DAYS("3天内", 3),
     LAST_7_DAYS("7天内", 7),
     LAST_30_DAYS("30天内", 30),
+    LAST_3_MONTHS("3个月内", 90),
+    CUSTOM("手动输入", null),
     ALL("全部时间", null)
 }
 
@@ -131,7 +133,7 @@ data class NicoCategory(
 val DefaultNicoCategories = listOf(
     NicoCategory("live", "直播", "", "-viewCounter"),
     NicoCategory("recommend", "推荐", "ニコニコ", "-viewCounter"),
-    NicoCategory("latest", "最新", "ニコニコ", "-startTime"),
+    NicoCategory("latest", "最新", "ニコニコ", "-viewCounter"),
     NicoCategory("anime", "动画", "アニメ", "-viewCounter"),
     NicoCategory("music", "音乐", "音楽", "-viewCounter"),
     NicoCategory("game", "游戏", "ゲーム", "-viewCounter"),

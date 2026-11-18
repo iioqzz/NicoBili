@@ -35,10 +35,13 @@ data class FeedUiState(
     val videos: List<NicoVideo> = emptyList(),
     val livePrograms: List<NicoVideo> = emptyList(),
     val isLoading: Boolean = false,
+    val isLoadingMore: Boolean = false,
     val errorMessage: String? = null,
     val searchQuery: String = "",
     val isSearching: Boolean = false,
-    val latestTimeRange: LatestTimeRange = LatestTimeRange.LAST_7_DAYS
+    val latestTimeRange: LatestTimeRange = LatestTimeRange.LAST_7_DAYS,
+    val customLatestDays: Int = 14,
+    val currentOffset: Int = 0
 )
 
 data class PlayerUiState(
@@ -111,12 +114,20 @@ class NicoBiliViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    private val recommendTopics = listOf(
+        "アニメ", "ゲーム", "音楽", "VOCALOID", "MMD",
+        "歌ってみた", "ゆっくり実況", "踊ってみた", "ニコニコ", "VTuber"
+    )
+    private var recommendTopicCursor = 0
+
     fun loadCategory(category: NicoCategory) {
         _feedState.value = _feedState.value.copy(
             selectedCategory = category,
             isLoading = true,
+            isLoadingMore = false,
             errorMessage = null,
-            isSearching = false
+            isSearching = false,
+            currentOffset = 0
         )
         viewModelScope.launch {
             if (category.id == "live") {
@@ -124,11 +135,34 @@ class NicoBiliViewModel(application: Application) : AndroidViewModel(application
                 _feedState.value = _feedState.value.copy(
                     livePrograms = live,
                     isLoading = false,
-                    errorMessage = if (live.isEmpty()) "暂时无法获取生放送列表，请检查网络" else null
+                    errorMessage = null
                 )
+            } else if (category.id == "recommend") {
+                runCatching {
+                    val topicA = recommendTopics[recommendTopicCursor % recommendTopics.size]
+                    val topicB = recommendTopics[(recommendTopicCursor + 1) % recommendTopics.size]
+                    recommendTopicCursor += 2
+                    val batchA = repository.searchVideos(query = topicA, sort = "-viewCounter", offset = 0)
+                    val batchB = repository.searchVideos(query = topicB, sort = "-viewCounter", offset = 0)
+                    (batchA.take(15) + batchB.take(15))
+                        .distinctBy { it.contentId }
+                        .shuffled()
+                }.onSuccess { list ->
+                    _feedState.value = _feedState.value.copy(
+                        videos = list,
+                        isLoading = false,
+                        currentOffset = 15,
+                        errorMessage = if (list.isEmpty()) "未找到推荐视频" else null
+                    )
+                }.onFailure { e ->
+                    _feedState.value = _feedState.value.copy(
+                        isLoading = false,
+                        errorMessage = "加载失败: ${e.localizedMessage ?: "网络异常"}"
+                    )
+                }
             } else {
                 val startTimeIso = if (category.id == "latest") {
-                    computeStartTimeIso(_feedState.value.latestTimeRange)
+                    computeStartTimeIso(_feedState.value.latestTimeRange, _feedState.value.customLatestDays)
                 } else {
                     null
                 }
@@ -136,12 +170,14 @@ class NicoBiliViewModel(application: Application) : AndroidViewModel(application
                     repository.searchVideos(
                         query = category.query,
                         sort = category.sort,
+                        offset = 0,
                         startTimeGteIso = startTimeIso
                     )
                 }.onSuccess { list ->
                     _feedState.value = _feedState.value.copy(
                         videos = list,
                         isLoading = false,
+                        currentOffset = list.size,
                         errorMessage = if (list.isEmpty()) "未找到相关视频" else null
                     )
                 }.onFailure { e ->
@@ -154,6 +190,47 @@ class NicoBiliViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    fun loadMoreVideos() {
+        val state = _feedState.value
+        if (state.isLoading || state.isLoadingMore || state.selectedCategory.id == "live") return
+        _feedState.value = state.copy(isLoadingMore = true)
+
+        viewModelScope.launch {
+            runCatching {
+                if (state.selectedCategory.id == "recommend" && !state.isSearching) {
+                    val topic = recommendTopics[recommendTopicCursor % recommendTopics.size]
+                    recommendTopicCursor += 1
+                    val offset = (recommendTopicCursor / recommendTopics.size) * 20
+                    repository.searchVideos(query = topic, sort = "-viewCounter", offset = offset)
+                        .shuffled()
+                } else {
+                    val query = if (state.isSearching) state.searchQuery else state.selectedCategory.query
+                    val startTimeIso = if (state.selectedCategory.id == "latest" && !state.isSearching) {
+                        computeStartTimeIso(state.latestTimeRange, state.customLatestDays)
+                    } else {
+                        null
+                    }
+                    repository.searchVideos(
+                        query = query,
+                        sort = state.selectedCategory.sort,
+                        offset = state.currentOffset,
+                        startTimeGteIso = startTimeIso
+                    )
+                }
+            }.onSuccess { more ->
+                val existingIds = _feedState.value.videos.map { it.contentId }.toSet()
+                val uniqueMore = more.filter { it.contentId !in existingIds }
+                _feedState.value = _feedState.value.copy(
+                    videos = _feedState.value.videos + uniqueMore,
+                    isLoadingMore = false,
+                    currentOffset = _feedState.value.currentOffset + more.size
+                )
+            }.onFailure {
+                _feedState.value = _feedState.value.copy(isLoadingMore = false)
+            }
+        }
+    }
+
     fun updateLatestTimeRange(range: LatestTimeRange) {
         _feedState.value = _feedState.value.copy(latestTimeRange = range)
         val latestCategory = DefaultNicoCategories.firstOrNull { it.id == "latest" }
@@ -161,8 +238,22 @@ class NicoBiliViewModel(application: Application) : AndroidViewModel(application
         loadCategory(latestCategory)
     }
 
-    private fun computeStartTimeIso(range: LatestTimeRange): String? {
-        val days = range.days ?: return null
+    fun updateCustomLatestDays(days: Int) {
+        val safeDays = days.coerceIn(1, 3650)
+        _feedState.value = _feedState.value.copy(
+            latestTimeRange = LatestTimeRange.CUSTOM,
+            customLatestDays = safeDays
+        )
+        val latestCategory = DefaultNicoCategories.firstOrNull { it.id == "latest" }
+            ?: _feedState.value.selectedCategory
+        loadCategory(latestCategory)
+    }
+
+    private fun computeStartTimeIso(range: LatestTimeRange, customDays: Int): String? {
+        val days = when (range) {
+            LatestTimeRange.CUSTOM -> customDays
+            else -> range.days
+        } ?: return null
         val cal = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("Asia/Tokyo"))
         cal.add(java.util.Calendar.DAY_OF_YEAR, -days)
         val sdf = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'+09:00'", java.util.Locale.US)

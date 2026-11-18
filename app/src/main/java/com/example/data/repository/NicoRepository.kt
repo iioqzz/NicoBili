@@ -44,9 +44,15 @@ class NicoRepository(
     suspend fun searchVideos(
         query: String,
         sort: String = "-viewCounter",
+        offset: Int = 0,
         startTimeGteIso: String? = null
     ): List<NicoVideo> {
-        return api.searchVideos(query = query, sort = sort, startTimeGteIso = startTimeGteIso)
+        return api.searchVideos(
+            query = query,
+            sort = sort,
+            offset = offset,
+            startTimeGteIso = startTimeGteIso
+        )
     }
 
     suspend fun fetchLivePrograms(): List<NicoVideo> {

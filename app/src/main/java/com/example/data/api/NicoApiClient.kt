@@ -7,6 +7,9 @@ import com.example.data.model.NicoUserAccount
 import com.example.data.model.NicoVideo
 import com.example.data.model.VideoQuality
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -38,17 +41,18 @@ class NicoApiClient {
         targets: String = "title,description,tags",
         sort: String = "-viewCounter",
         limit: Int = 30,
+        offset: Int = 0,
         startTimeGteIso: String? = null
     ): List<NicoVideo> = withContext(Dispatchers.IO) {
         val encodedQuery = URLEncoder.encode(query.ifBlank { "ニコニコ" }, "UTF-8")
-        val fields = "contentId,title,description,viewCounter,mylistCounter,likeCounter,lengthSeconds,thumbnailUrl,startTime,commentCounter,tags,genre"
+        val fields = "contentId,title,description,viewCounter,mylistCounter,likeCounter,lengthSeconds,thumbnailUrl,startTime,commentCounter,tags,genre,userId,channelId"
         val filterParam = if (!startTimeGteIso.isNullOrBlank()) {
             "&filters[startTime][gte]=${URLEncoder.encode(startTimeGteIso, "UTF-8")}"
         } else {
             ""
         }
         val url = "https://snapshot.search.nicovideo.jp/api/v2/snapshot/video/contents/search" +
-            "?q=$encodedQuery&targets=$targets&fields=$fields&_sort=$sort&_limit=$limit&_context=nicobili$filterParam"
+            "?q=$encodedQuery&targets=$targets&fields=$fields&_sort=$sort&_limit=$limit&_offset=$offset&_context=nicobili$filterParam"
 
         val request = Request.Builder()
             .url(url)
@@ -56,18 +60,30 @@ class NicoApiClient {
             .get()
             .build()
 
+        val rawList = mutableListOf<Pair<NicoVideo, String>>()
+        val userIds = mutableSetOf<String>()
+
         httpClient.newCall(request).execute().use { response ->
             if (!response.isSuccessful) return@withContext emptyList()
             val body = response.body?.string() ?: return@withContext emptyList()
             val root = JSONObject(body)
             val data = root.optJSONArray("data") ?: return@withContext emptyList()
-            val list = mutableListOf<NicoVideo>()
             for (i in 0 until data.length()) {
                 val obj = data.optJSONObject(i) ?: continue
                 val contentId = obj.optString("contentId")
                 if (contentId.isBlank()) continue
                 val rawTags = obj.optString("tags", "")
-                list.add(
+                val userId = obj.optString("userId", "").takeIf { it != "null" && it.isNotBlank() } ?: ""
+                val channelId = obj.optString("channelId", "").takeIf { it != "null" && it.isNotBlank() } ?: ""
+                if (userId.isNotBlank()) userIds.add(userId)
+
+                val fallbackName = when {
+                    channelId.isNotBlank() -> "ch$channelId"
+                    userId.isNotBlank() -> "user/$userId"
+                    else -> obj.optString("genre", "").ifBlank { "NicoNico" }
+                }
+
+                rawList.add(
                     NicoVideo(
                         contentId = contentId,
                         title = obj.optString("title", "Untitled"),
@@ -79,20 +95,111 @@ class NicoApiClient {
                         likeCounter = obj.optLong("likeCounter", 0L),
                         lengthSeconds = obj.optInt("lengthSeconds", 0),
                         startTime = obj.optString("startTime", "").take(10),
+                        uploaderName = fallbackName,
                         genre = obj.optString("genre", ""),
                         tags = rawTags.split(" ").filter { it.isNotBlank() }
-                    )
+                    ) to userId
                 )
             }
-            list
         }
+
+        // Batch-resolve real UP主 nicknames & icons via nvapi
+        val userMap = fetchUserNicknames(userIds)
+        val resolved = rawList.map { (video, uid) ->
+            val info = userMap[uid]
+            if (info != null) {
+                video.copy(uploaderName = info.first, uploaderIconUrl = info.second)
+            } else {
+                video
+            }
+        }
+
+        // For any remaining unresolved items (e.g. channels or missed userIds), fetch real nickname via getthumbinfo in parallel
+        coroutineScope {
+            resolved.map { video ->
+                async {
+                    if (video.uploaderName.startsWith("user/") || video.uploaderName.startsWith("ch")) {
+                        val thumbName = fetchUploaderNameFromThumbInfo(video.contentId)
+                        if (!thumbName.isNullOrBlank()) {
+                            video.copy(uploaderName = thumbName)
+                        } else {
+                            video
+                        }
+                    } else {
+                        video
+                    }
+                }
+            }.awaitAll()
+        }
+    }
+
+    private fun fetchUserNicknames(userIds: Set<String>): Map<String, Pair<String, String>> {
+        if (userIds.isEmpty()) return emptyMap()
+        val result = mutableMapOf<String, Pair<String, String>>()
+        userIds.chunked(50).forEach { chunk ->
+            val idsParam = chunk.joinToString(",")
+            val req = Request.Builder()
+                .url("https://nvapi.nicovideo.jp/v1/users?userIds=$idsParam")
+                .header("User-Agent", userAgent)
+                .header("X-Frontend-Id", "6")
+                .header("X-Frontend-Version", "0")
+                .header("X-Request-With", "https://www.nicovideo.jp")
+                .get()
+                .build()
+            runCatching {
+                httpClient.newCall(req).execute().use { resp ->
+                    if (!resp.isSuccessful) return@use
+                    val root = JSONObject(resp.body?.string() ?: return@use)
+                    val dataObj = root.optJSONObject("data") ?: return@use
+                    val items = dataObj.optJSONArray("users")
+                        ?: dataObj.optJSONArray("items")
+                        ?: return@use
+                    for (i in 0 until items.length()) {
+                        val u = items.optJSONObject(i) ?: continue
+                        val id = u.optString("id")
+                        val nickname = u.optString("nickname")
+                        val icons = u.optJSONObject("icons")
+                        val iconUrl = icons?.optString("small")?.ifBlank { icons.optString("large") } ?: ""
+                        if (id.isNotBlank() && nickname.isNotBlank()) {
+                            result[id] = nickname to iconUrl
+                        }
+                    }
+                }
+            }
+        }
+        return result
+    }
+
+    private fun fetchUploaderNameFromThumbInfo(contentId: String): String? {
+        val req = Request.Builder()
+            .url("https://ext.nicovideo.jp/api/getthumbinfo/$contentId")
+            .header("User-Agent", userAgent)
+            .get()
+            .build()
+        return runCatching {
+            httpClient.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) return@use null
+                val xml = resp.body?.string() ?: return@use null
+                val userMatch = Regex("<user_nickname>(.*?)</user_nickname>").find(xml)
+                val chMatch = Regex("<ch_name>(.*?)</ch_name>").find(xml)
+                val raw = userMatch?.groupValues?.getOrNull(1)?.takeIf { it.isNotBlank() }
+                    ?: chMatch?.groupValues?.getOrNull(1)?.takeIf { it.isNotBlank() }
+                raw?.replace("&amp;", "&")
+                    ?.replace("&lt;", "<")
+                    ?.replace("&gt;", ">")
+                    ?.replace("&quot;", "\"")
+                    ?.replace("&#39;", "'")
+            }
+        }.getOrNull()
     }
 
     suspend fun fetchLivePrograms(limit: Int = 24): List<NicoVideo> = withContext(Dispatchers.IO) {
         val url = "https://live.nicovideo.jp/front/api/pages/ranking/v1/programs?type=onair"
         val request = Request.Builder()
             .url(url)
-            .header("User-Agent", userAgent)
+            .header("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36")
+            .header("Referer", "https://sp.live.nicovideo.jp/")
+            .header("Origin", "https://sp.live.nicovideo.jp")
             .header("X-Frontend-Id", "6")
             .get()
             .build()
