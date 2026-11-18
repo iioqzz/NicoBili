@@ -132,6 +132,7 @@ fun VideoPlayerScreen(
     onToggleLike: () -> Unit,
     onToggleFollow: () -> Unit,
     onToggleFavorite: (NicoVideo, Boolean) -> Unit,
+    onUploaderClick: (String, String, String) -> Unit,
     onDownloadClick: () -> Unit,
     onSendDanmaku: (String, Long, DanmakuPosition, Long) -> Unit,
     onUpdateFilterConfig: (DanmakuFilterConfig) -> Unit,
@@ -543,45 +544,61 @@ fun VideoPlayerScreen(
                                 .background(MaterialTheme.colorScheme.surface)
                                 .padding(14.dp)
                         ) {
-                            // Uploader Row
+                            // Uploader Row (Tap avatar or name to open UP主主页)
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Box(
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
                                     modifier = Modifier
-                                        .size(40.dp)
-                                        .clip(CircleShape)
-                                        .background(MaterialTheme.colorScheme.primaryContainer),
-                                    contentAlignment = Alignment.Center
+                                        .weight(1f)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .testTag("player_uploader_entry")
+                                        .clickable {
+                                            onUploaderClick(
+                                                video.uploaderId,
+                                                video.uploaderName,
+                                                video.uploaderIconUrl
+                                            )
+                                        }
+                                        .padding(vertical = 2.dp)
                                 ) {
-                                    if (video.uploaderIconUrl.isNotBlank()) {
-                                        AsyncImage(
-                                            model = video.uploaderIconUrl,
-                                            contentDescription = video.uploaderName,
-                                            contentScale = ContentScale.Crop,
-                                            modifier = Modifier.fillMaxSize()
+                                    Box(
+                                        modifier = Modifier
+                                            .size(40.dp)
+                                            .clip(CircleShape)
+                                            .background(MaterialTheme.colorScheme.primaryContainer),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        if (video.uploaderIconUrl.isNotBlank()) {
+                                            AsyncImage(
+                                                model = video.uploaderIconUrl,
+                                                contentDescription = video.uploaderName,
+                                                contentScale = ContentScale.Crop,
+                                                modifier = Modifier.fillMaxSize()
+                                            )
+                                        } else {
+                                            Icon(
+                                                imageVector = Icons.Rounded.Person,
+                                                contentDescription = null,
+                                                tint = MaterialTheme.colorScheme.primary
+                                            )
+                                        }
+                                    }
+                                    Spacer(Modifier.width(10.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = video.uploaderName,
+                                            style = MaterialTheme.typography.titleMedium,
+                                            color = MaterialTheme.colorScheme.primary
                                         )
-                                    } else {
-                                        Icon(
-                                            imageVector = Icons.Rounded.Person,
-                                            contentDescription = null,
-                                            tint = MaterialTheme.colorScheme.primary
+                                        Text(
+                                            text = "ID: ${video.contentId}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
                                     }
-                                }
-                                Spacer(Modifier.width(10.dp))
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = video.uploaderName,
-                                        style = MaterialTheme.typography.titleMedium,
-                                        color = MaterialTheme.colorScheme.primary
-                                    )
-                                    Text(
-                                        text = "ID: ${video.contentId}",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
                                 }
                                 Button(
                                     onClick = onToggleFollow,

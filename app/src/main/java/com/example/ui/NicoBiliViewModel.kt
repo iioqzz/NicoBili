@@ -18,6 +18,7 @@ import com.example.data.model.NicoCategory
 import com.example.data.model.NicoUserAccount
 import com.example.data.model.NicoVideo
 import com.example.data.model.ThemeMode
+import com.example.data.model.UploaderProfile
 import com.example.data.model.VideoQuality
 import com.example.data.repository.NicoRepository
 import com.example.player.BackgroundPlaybackService
@@ -58,6 +59,14 @@ data class PlayerUiState(
     val statusMessage: String? = null
 )
 
+data class UploaderSpaceUiState(
+    val profile: UploaderProfile = UploaderProfile(userId = "", nickname = ""),
+    val videos: List<NicoVideo> = emptyList(),
+    val isLoading: Boolean = false,
+    val sortKey: String = "registeredAt",
+    val isFollowed: Boolean = false
+)
+
 class NicoBiliViewModel(application: Application) : AndroidViewModel(application) {
 
     private val api = NicoApiClient()
@@ -89,6 +98,9 @@ class NicoBiliViewModel(application: Application) : AndroidViewModel(application
 
     private val _playerState = MutableStateFlow(PlayerUiState())
     val playerState: StateFlow<PlayerUiState> = _playerState.asStateFlow()
+
+    private val _uploaderSpaceState = MutableStateFlow(UploaderSpaceUiState())
+    val uploaderSpaceState: StateFlow<UploaderSpaceUiState> = _uploaderSpaceState.asStateFlow()
 
     private val _account = MutableStateFlow(NicoUserAccount())
     val account: StateFlow<NicoUserAccount> = _account.asStateFlow()
@@ -356,6 +368,56 @@ class NicoBiliViewModel(application: Application) : AndroidViewModel(application
 
     fun toggleFollow() {
         _playerState.value = _playerState.value.copy(isFollowed = !_playerState.value.isFollowed)
+    }
+
+    fun openUploaderSpace(userId: String, fallbackName: String, fallbackIcon: String) {
+        _uploaderSpaceState.value = UploaderSpaceUiState(
+            profile = UploaderProfile(
+                userId = userId,
+                nickname = fallbackName.ifBlank { "ニコニコ投稿者" },
+                iconUrl = fallbackIcon
+            ),
+            isLoading = true,
+            sortKey = "registeredAt",
+            isFollowed = _playerState.value.isFollowed
+        )
+        viewModelScope.launch {
+            val profile = repository.fetchUploaderProfile(userId, fallbackName, fallbackIcon)
+            val videos = if (userId.isNotBlank()) {
+                repository.fetchUploaderVideos(userId, sortKey = "registeredAt", page = 1)
+            } else {
+                repository.searchVideos(query = fallbackName, sort = "-startTime")
+            }
+            _uploaderSpaceState.value = _uploaderSpaceState.value.copy(
+                profile = profile.copy(videoCount = videos.size),
+                videos = videos,
+                isLoading = false
+            )
+        }
+    }
+
+    fun changeUploaderSort(sortKey: String) {
+        val current = _uploaderSpaceState.value
+        val uid = current.profile.userId
+        _uploaderSpaceState.value = current.copy(sortKey = sortKey, isLoading = true)
+        viewModelScope.launch {
+            val videos = if (uid.isNotBlank()) {
+                repository.fetchUploaderVideos(uid, sortKey = sortKey, page = 1)
+            } else {
+                val apiSort = if (sortKey == "viewCount") "-viewCounter" else "-startTime"
+                repository.searchVideos(query = current.profile.nickname, sort = apiSort)
+            }
+            _uploaderSpaceState.value = _uploaderSpaceState.value.copy(
+                videos = videos,
+                isLoading = false
+            )
+        }
+    }
+
+    fun toggleUploaderFollow() {
+        val next = !_uploaderSpaceState.value.isFollowed
+        _uploaderSpaceState.value = _uploaderSpaceState.value.copy(isFollowed = next)
+        _playerState.value = _playerState.value.copy(isFollowed = next)
     }
 
     fun toggleFavorite(video: NicoVideo, isCurrentlyFav: Boolean) {

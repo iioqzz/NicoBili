@@ -59,6 +59,18 @@ class NicoRepository(
         return api.fetchLivePrograms()
     }
 
+    suspend fun fetchUploaderProfile(
+        userId: String,
+        fallbackName: String,
+        fallbackIcon: String
+    ) = api.fetchUploaderProfile(userId, fallbackName, fallbackIcon)
+
+    suspend fun fetchUploaderVideos(
+        userId: String,
+        sortKey: String = "registeredAt",
+        page: Int = 1
+    ): List<NicoVideo> = api.fetchUploaderVideos(userId, sortKey, page)
+
     suspend fun loadWatchDetail(video: NicoVideo): WatchDetailResult {
         val cookie = prefs.sessionCookieFlow.first()
         // Check if downloaded locally first

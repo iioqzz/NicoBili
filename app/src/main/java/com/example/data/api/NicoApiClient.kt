@@ -5,6 +5,7 @@ import com.example.data.model.DanmakuPosition
 import com.example.data.model.DanmakuSize
 import com.example.data.model.NicoUserAccount
 import com.example.data.model.NicoVideo
+import com.example.data.model.UploaderProfile
 import com.example.data.model.VideoQuality
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -95,6 +96,7 @@ class NicoApiClient {
                         likeCounter = obj.optLong("likeCounter", 0L),
                         lengthSeconds = obj.optInt("lengthSeconds", 0),
                         startTime = obj.optString("startTime", "").take(10),
+                        uploaderId = userId,
                         uploaderName = fallbackName,
                         genre = obj.optString("genre", ""),
                         tags = rawTags.split(" ").filter { it.isNotBlank() }
@@ -382,6 +384,7 @@ class NicoApiClient {
                     mylistCounter = countObj?.optLong("mylist", baseVideo.mylistCounter) ?: baseVideo.mylistCounter,
                     likeCounter = countObj?.optLong("like", baseVideo.likeCounter) ?: baseVideo.likeCounter,
                     lengthSeconds = videoObj?.optInt("duration", baseVideo.lengthSeconds) ?: baseVideo.lengthSeconds,
+                    uploaderId = ownerObj?.optString("id")?.ifBlank { baseVideo.uploaderId } ?: baseVideo.uploaderId,
                     uploaderName = ownerObj?.optString("nickname")?.ifBlank { baseVideo.uploaderName }
                         ?: baseVideo.uploaderName,
                     uploaderIconUrl = ownerObj?.optString("iconUrl", "") ?: "",
@@ -623,7 +626,109 @@ class NicoApiClient {
                             viewCounter = count?.optLong("view", 0L) ?: 0L,
                             commentCounter = count?.optLong("comment", 0L) ?: 0L,
                             lengthSeconds = video.optInt("duration", 0),
+                            uploaderId = owner?.optString("id", "") ?: "",
                             uploaderName = owner?.optString("name", "投稿者") ?: "投稿者"
+                        )
+                    )
+                }
+                list
+            }
+        }.getOrDefault(emptyList())
+    }
+
+    suspend fun fetchUploaderProfile(
+        userId: String,
+        fallbackName: String,
+        fallbackIcon: String
+    ): UploaderProfile = withContext(Dispatchers.IO) {
+        if (userId.isBlank()) {
+            return@withContext UploaderProfile(
+                userId = "",
+                nickname = fallbackName,
+                iconUrl = fallbackIcon
+            )
+        }
+        val req = Request.Builder()
+            .url("https://nvapi.nicovideo.jp/v1/users/$userId")
+            .header("User-Agent", userAgent)
+            .header("X-Frontend-Id", "6")
+            .header("X-Frontend-Version", "0")
+            .header("X-Request-With", "https://www.nicovideo.jp")
+            .get()
+            .build()
+
+        runCatching {
+            httpClient.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) {
+                    return@use UploaderProfile(userId = userId, nickname = fallbackName, iconUrl = fallbackIcon)
+                }
+                val root = JSONObject(resp.body?.string() ?: return@use UploaderProfile(userId, fallbackName, fallbackIcon))
+                val user = root.optJSONObject("data")?.optJSONObject("user")
+                    ?: return@use UploaderProfile(userId, fallbackName, fallbackIcon)
+                val icons = user.optJSONObject("icons")
+                val levelObj = user.optJSONObject("userLevel")
+                UploaderProfile(
+                    userId = userId,
+                    nickname = user.optString("nickname").ifBlank { fallbackName },
+                    iconUrl = icons?.optString("large")?.ifBlank { icons.optString("small") }?.ifBlank { fallbackIcon } ?: fallbackIcon,
+                    description = user.optString("strippedDescription", user.optString("description", ""))
+                        .replace(Regex("<[^>]*>"), ""),
+                    followerCount = user.optLong("followerCount", 0L),
+                    followingCount = user.optLong("followingCount", 0L),
+                    level = levelObj?.optInt("currentLevel", 1) ?: 1,
+                    isPremium = user.optBoolean("isPremium", false)
+                )
+            }
+        }.getOrElse {
+            UploaderProfile(userId = userId, nickname = fallbackName, iconUrl = fallbackIcon)
+        }
+    }
+
+    suspend fun fetchUploaderVideos(
+        userId: String,
+        sortKey: String = "registeredAt",
+        page: Int = 1
+    ): List<NicoVideo> = withContext(Dispatchers.IO) {
+        if (userId.isBlank()) return@withContext emptyList()
+        val req = Request.Builder()
+            .url("https://nvapi.nicovideo.jp/v3/users/$userId/videos?sortKey=$sortKey&sortOrder=desc&pageSize=30&page=$page")
+            .header("User-Agent", userAgent)
+            .header("X-Frontend-Id", "6")
+            .header("X-Frontend-Version", "0")
+            .header("X-Request-With", "https://www.nicovideo.jp")
+            .get()
+            .build()
+
+        runCatching {
+            httpClient.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) return@use emptyList()
+                val root = JSONObject(resp.body?.string() ?: return@use emptyList())
+                val items = root.optJSONObject("data")?.optJSONArray("items") ?: return@use emptyList()
+                val list = mutableListOf<NicoVideo>()
+                for (i in 0 until items.length()) {
+                    val item = items.optJSONObject(i) ?: continue
+                    val video = item.optJSONObject("essential") ?: item
+                    val count = video.optJSONObject("count")
+                    val owner = video.optJSONObject("owner")
+                    val thumb = video.optJSONObject("thumbnail")
+                    val contentId = video.optString("id")
+                    if (contentId.isBlank()) continue
+                    list.add(
+                        NicoVideo(
+                            contentId = contentId,
+                            title = video.optString("title", "Untitled"),
+                            thumbnailUrl = thumb?.optString("largeUrl")
+                                ?.ifBlank { thumb.optString("middleUrl") }
+                                ?.ifBlank { thumb.optString("url") } ?: "",
+                            viewCounter = count?.optLong("view", 0L) ?: 0L,
+                            commentCounter = count?.optLong("comment", 0L) ?: 0L,
+                            mylistCounter = count?.optLong("mylist", 0L) ?: 0L,
+                            likeCounter = count?.optLong("like", 0L) ?: 0L,
+                            lengthSeconds = video.optInt("duration", 0),
+                            startTime = video.optString("registeredAt", "").take(10),
+                            uploaderId = owner?.optString("id")?.ifBlank { userId } ?: userId,
+                            uploaderName = owner?.optString("name", "") ?: "",
+                            uploaderIconUrl = owner?.optString("iconUrl", "") ?: ""
                         )
                     )
                 }

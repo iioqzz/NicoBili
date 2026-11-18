@@ -20,6 +20,8 @@ import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -54,7 +56,10 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -94,7 +99,33 @@ fun HomeScreen(
     var searchText by remember { mutableStateOf(feedState.searchQuery) }
     var showTimeRangeSheet by remember { mutableStateOf(false) }
     val keyboard = LocalSoftwareKeyboardController.current
-    val gridState = rememberLazyGridState()
+    val coroutineScope = rememberCoroutineScope()
+
+    val selectedIndex = DefaultNicoCategories.indexOfFirst {
+        it.id == feedState.selectedCategory.id
+    }.coerceAtLeast(0)
+
+    val pagerState = rememberPagerState(
+        initialPage = selectedIndex,
+        pageCount = { DefaultNicoCategories.size }
+    )
+
+    // Sync swipe -> ViewModel category load
+    LaunchedEffect(pagerState) {
+        snapshotFlow { pagerState.settledPage }.collect { page ->
+            val targetCategory = DefaultNicoCategories.getOrNull(page)
+            if (targetCategory != null && targetCategory.id != feedState.selectedCategory.id) {
+                onSelectCategory(targetCategory)
+            }
+        }
+    }
+
+    // Sync external category change -> Pager
+    LaunchedEffect(selectedIndex) {
+        if (pagerState.currentPage != selectedIndex) {
+            pagerState.animateScrollToPage(selectedIndex)
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -224,20 +255,16 @@ fun HomeScreen(
                     }
                 }
 
-                // Category Tabs (直播 | 推荐 | 动画 | 音乐 | 游戏 | VOCALOID | 排行榜)
-                val selectedIndex = DefaultNicoCategories.indexOfFirst {
-                    it.id == feedState.selectedCategory.id
-                }.coerceAtLeast(0)
-
+                // Category Tabs (直播 | 推荐 | 最新 | 动画 | 音乐 | 游戏 | VOCALOID | 排行榜)
                 ScrollableTabRow(
-                    selectedTabIndex = selectedIndex,
+                    selectedTabIndex = pagerState.currentPage,
                     edgePadding = 12.dp,
                     containerColor = MaterialTheme.colorScheme.surface,
                     contentColor = MaterialTheme.colorScheme.primary,
                     indicator = { tabPositions ->
-                        if (selectedIndex < tabPositions.size) {
+                        if (pagerState.currentPage < tabPositions.size) {
                             TabRowDefaults.SecondaryIndicator(
-                                modifier = Modifier.tabIndicatorOffset(tabPositions[selectedIndex]),
+                                modifier = Modifier.tabIndicatorOffset(tabPositions[pagerState.currentPage]),
                                 height = 3.dp,
                                 color = MaterialTheme.colorScheme.primary
                             )
@@ -246,7 +273,7 @@ fun HomeScreen(
                     divider = {}
                 ) {
                     DefaultNicoCategories.forEachIndexed { index, category ->
-                        val selected = index == selectedIndex
+                        val selected = index == pagerState.currentPage
                         val isLatest = category.id == "latest"
                         Tab(
                             selected = selected,
@@ -254,6 +281,9 @@ fun HomeScreen(
                                 if (isLatest && selected) {
                                     showTimeRangeSheet = true
                                 } else {
+                                    coroutineScope.launch {
+                                        pagerState.animateScrollToPage(index)
+                                    }
                                     onSelectCategory(category)
                                 }
                             },
@@ -295,87 +325,100 @@ fun HomeScreen(
             }
         }
 
-        // Content Grid
-        val isLiveTab = feedState.selectedCategory.id == "live" && !feedState.isSearching
-        val itemsToShow = if (isLiveTab) {
-            feedState.livePrograms
-        } else {
-            feedState.videos
-        }
-
-        // Trigger infinite scroll when reaching near bottom
-        val shouldLoadMore by remember(itemsToShow.size) {
-            derivedStateOf {
-                val lastVisible = gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
-                itemsToShow.isNotEmpty() && lastVisible >= itemsToShow.size - 4
+        // Swipeable HorizontalPager for all category tabs
+        HorizontalPager(
+            state = pagerState,
+            modifier = Modifier
+                .fillMaxSize()
+                .testTag("home_category_pager")
+        ) { page ->
+            val pageCategory = DefaultNicoCategories[page]
+            val isCurrentPage = page == pagerState.currentPage
+            val isLivePage = pageCategory.id == "live" && !feedState.isSearching
+            val itemsToShow = if (isLivePage) {
+                feedState.livePrograms
+            } else if (isCurrentPage) {
+                feedState.videos
+            } else {
+                emptyList()
             }
-        }
-        LaunchedEffect(shouldLoadMore) {
-            if (shouldLoadMore && !isLiveTab) {
-                onLoadMore()
-            }
-        }
 
-        Box(modifier = Modifier.fillMaxSize()) {
-            when {
-                isLiveTab && itemsToShow.isEmpty() && !feedState.isLoading -> {
-                    NicoLivePortalWebView(modifier = Modifier.fillMaxSize())
+            val pageGridState = rememberLazyGridState()
+            val shouldLoadMore by remember(itemsToShow.size, isCurrentPage) {
+                derivedStateOf {
+                    val lastVisible = pageGridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+                    isCurrentPage && itemsToShow.isNotEmpty() && lastVisible >= itemsToShow.size - 4
                 }
-                feedState.isLoading && itemsToShow.isEmpty() -> {
-                    CircularProgressIndicator(
-                        modifier = Modifier.align(Alignment.Center),
-                        color = MaterialTheme.colorScheme.primary
-                    )
+            }
+            LaunchedEffect(shouldLoadMore) {
+                if (shouldLoadMore && !isLivePage) {
+                    onLoadMore()
                 }
-                feedState.errorMessage != null && itemsToShow.isEmpty() -> {
-                    Column(
-                        modifier = Modifier
-                            .align(Alignment.Center)
-                            .padding(24.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Text(
-                            text = feedState.errorMessage,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Spacer(Modifier.height(12.dp))
-                        IconButton(onClick = { onSelectCategory(feedState.selectedCategory) }) {
-                            Icon(
-                                imageVector = Icons.Rounded.Refresh,
-                                contentDescription = "重试",
-                                tint = MaterialTheme.colorScheme.primary
-                            )
+            }
+
+            Box(modifier = Modifier.fillMaxSize()) {
+                when {
+                    isLivePage && itemsToShow.isEmpty() && !feedState.isLoading -> {
+                        if (isCurrentPage) {
+                            NicoLivePortalWebView(modifier = Modifier.fillMaxSize())
                         }
                     }
-                }
-                else -> {
-                    LazyVerticalGrid(
-                        state = gridState,
-                        columns = GridCells.Adaptive(minSize = 165.dp),
-                        contentPadding = PaddingValues(8.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                        modifier = Modifier.fillMaxSize()
-                    ) {
-                        items(itemsToShow, key = { it.contentId }) { video ->
-                            VideoGridCard(
-                                video = video,
-                                onClick = { onVideoClick(video) }
+                    (feedState.isLoading || !isCurrentPage) && itemsToShow.isEmpty() -> {
+                        CircularProgressIndicator(
+                            modifier = Modifier.align(Alignment.Center),
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    feedState.errorMessage != null && itemsToShow.isEmpty() -> {
+                        Column(
+                            modifier = Modifier
+                                .align(Alignment.Center)
+                                .padding(24.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(
+                                text = feedState.errorMessage,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
+                            Spacer(Modifier.height(12.dp))
+                            IconButton(onClick = { onSelectCategory(pageCategory) }) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Refresh,
+                                    contentDescription = "重试",
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            }
                         }
-                        if (feedState.isLoadingMore) {
-                            item(span = { GridItemSpan(maxLineSpan) }) {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(16.dp),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(26.dp),
-                                        strokeWidth = 2.5.dp,
-                                        color = MaterialTheme.colorScheme.primary
-                                    )
+                    }
+                    else -> {
+                        LazyVerticalGrid(
+                            state = pageGridState,
+                            columns = GridCells.Adaptive(minSize = 165.dp),
+                            contentPadding = PaddingValues(8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.fillMaxSize()
+                        ) {
+                            items(itemsToShow, key = { it.contentId }) { video ->
+                                VideoGridCard(
+                                    video = video,
+                                    onClick = { onVideoClick(video) }
+                                )
+                            }
+                            if (feedState.isLoadingMore && isCurrentPage) {
+                                item(span = { GridItemSpan(maxLineSpan) }) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(16.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(26.dp),
+                                            strokeWidth = 2.5.dp,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
                                 }
                             }
                         }

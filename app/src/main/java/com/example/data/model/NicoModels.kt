@@ -42,6 +42,7 @@ data class NicoVideo(
     val likeCounter: Long = 0L,
     val lengthSeconds: Int = 0,
     val startTime: String = "",
+    val uploaderId: String = "",
     val uploaderName: String = "ニコニコ投稿者",
     val uploaderIconUrl: String = "",
     val tags: List<String> = emptyList(),
@@ -111,6 +112,18 @@ data class NicoUserAccount(
     val iconUrl: String = "",
     val isPremium: Boolean = false,
     val sessionCookie: String = ""
+)
+
+data class UploaderProfile(
+    val userId: String,
+    val nickname: String,
+    val iconUrl: String = "",
+    val description: String = "",
+    val followerCount: Long = 0L,
+    val followingCount: Long = 0L,
+    val videoCount: Int = 0,
+    val level: Int = 1,
+    val isPremium: Boolean = false
 )
 
 enum class LatestTimeRange(val label: String, val days: Int?) {

@@ -46,6 +46,7 @@ import com.example.ui.screens.HomeScreen
 import com.example.ui.screens.LiveScreen
 import com.example.ui.screens.OfficialLoginScreen
 import com.example.ui.screens.ProfileScreen
+import com.example.ui.screens.UploaderSpaceScreen
 import com.example.ui.screens.VideoPlayerScreen
 import com.example.ui.theme.NicoBiliTheme
 
@@ -79,6 +80,7 @@ fun NicoBiliApp(viewModel: NicoBiliViewModel) {
     val themeMode by viewModel.themeMode.collectAsStateWithLifecycle()
     val feedState by viewModel.feedState.collectAsStateWithLifecycle()
     val playerState by viewModel.playerState.collectAsStateWithLifecycle()
+    val uploaderSpaceState by viewModel.uploaderSpaceState.collectAsStateWithLifecycle()
     val filterConfig by viewModel.danmakuFilterConfig.collectAsStateWithLifecycle()
     val downloads by viewModel.downloads.collectAsStateWithLifecycle()
     val history by viewModel.history.collectAsStateWithLifecycle()
@@ -94,6 +96,7 @@ fun NicoBiliApp(viewModel: NicoBiliViewModel) {
 
     var selectedTabIndex by remember { mutableIntStateOf(0) }
     var isPlayerOpen by remember { mutableStateOf(false) }
+    var isUploaderSpaceOpen by remember { mutableStateOf(false) }
     var isLoginOpen by remember { mutableStateOf(false) }
 
     val snackbarHostState = remember { SnackbarHostState() }
@@ -111,6 +114,19 @@ fun NicoBiliApp(viewModel: NicoBiliViewModel) {
                 OfficialLoginScreen(
                     onBack = { isLoginOpen = false },
                     onLoginCaptured = { cookie -> viewModel.onOfficialLoginCookiesCaptured(cookie) }
+                )
+            }
+            isUploaderSpaceOpen -> {
+                UploaderSpaceScreen(
+                    state = uploaderSpaceState,
+                    onBack = { isUploaderSpaceOpen = false },
+                    onToggleFollow = { viewModel.toggleUploaderFollow() },
+                    onChangeSort = { viewModel.changeUploaderSort(it) },
+                    onVideoClick = { video ->
+                        isUploaderSpaceOpen = false
+                        viewModel.openVideo(video)
+                        isPlayerOpen = true
+                    }
                 )
             }
             isPlayerOpen && playerState.currentVideo != null -> {
@@ -139,6 +155,10 @@ fun NicoBiliApp(viewModel: NicoBiliViewModel) {
                             onToggleLike = { viewModel.toggleLike() },
                             onToggleFollow = { viewModel.toggleFollow() },
                             onToggleFavorite = { v, fav -> viewModel.toggleFavorite(v, fav) },
+                            onUploaderClick = { uid, name, icon ->
+                                viewModel.openUploaderSpace(uid, name, icon)
+                                isUploaderSpaceOpen = true
+                            },
                             onDownloadClick = { viewModel.downloadCurrentVideo() },
                             onSendDanmaku = { body, posMs, pos, color ->
                                 viewModel.sendLocalDanmaku(body, posMs, pos, color)
