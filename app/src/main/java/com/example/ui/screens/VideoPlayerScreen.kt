@@ -215,7 +215,7 @@ fun VideoPlayerScreen(
         }
     }
 
-    // Poll playback position for Danmaku sync
+    // Poll real ExoPlayer playback position for Danmaku sync
     LaunchedEffect(exoPlayer, playableUrl) {
         while (true) {
             if (playableUrl.isNotBlank()) {
@@ -224,9 +224,8 @@ fun VideoPlayerScreen(
                     durationMs = exoPlayer.duration
                 }
                 isPlaying = exoPlayer.isPlaying
-            } else if (isPlaying) {
-                currentPosMs += 50L
-                if (currentPosMs > durationMs) currentPosMs = 0L
+            } else {
+                isPlaying = false
             }
             delay(50L)
         }
@@ -285,6 +284,12 @@ fun VideoPlayerScreen(
                 // Live WebView Player for NicoNico 生放送
                 NicoLiveWebPlayer(
                     liveUrl = video.shareUrl,
+                    modifier = Modifier.fillMaxSize()
+                )
+            } else if (!playerState.isLoading) {
+                // Fallback to official NicoNico embed player if direct HLS stream is unavailable
+                NicoLiveWebPlayer(
+                    liveUrl = "https://embed.nicovideo.jp/watch/${video.contentId}",
                     modifier = Modifier.fillMaxSize()
                 )
             } else {

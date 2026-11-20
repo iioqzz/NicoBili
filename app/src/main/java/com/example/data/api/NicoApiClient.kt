@@ -265,7 +265,8 @@ class NicoApiClient {
             )
         }
 
-        val trackId = "nicobili_${System.currentTimeMillis()}"
+        val randomPrefix = (1..10).map { "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789".random() }.joinToString("")
+        val trackId = "${randomPrefix}_${System.currentTimeMillis()}"
         val endpoint = if (sessionCookie.isNotBlank()) {
             "https://www.nicovideo.jp/api/watch/v3/${baseVideo.contentId}?actionTrackId=$trackId"
         } else {
@@ -277,6 +278,7 @@ class NicoApiClient {
             .header("User-Agent", userAgent)
             .header("X-Frontend-Id", "6")
             .header("X-Frontend-Version", "0")
+            .header("X-Request-With", "https://www.nicovideo.jp")
             .header("Referer", "https://www.nicovideo.jp/watch/${baseVideo.contentId}")
 
         if (sessionCookie.isNotBlank()) {
@@ -288,6 +290,13 @@ class NicoApiClient {
                 if (!response.isSuccessful) {
                     return@use WatchDetailResult(baseVideo, emptyList())
                 }
+                val watchSetCookies = response.headers("Set-Cookie")
+                    .map { it.substringBefore(";") }
+                    .filter { it.isNotBlank() }
+                val mergedCookie = listOf(sessionCookie, watchSetCookies.joinToString("; "))
+                    .filter { it.isNotBlank() }
+                    .joinToString("; ")
+
                 val body = response.body?.string() ?: return@use WatchDetailResult(baseVideo, emptyList())
                 val root = JSONObject(body)
                 val data = root.optJSONObject("data") ?: return@use WatchDetailResult(baseVideo, emptyList())
@@ -346,11 +355,13 @@ class NicoApiClient {
                                 trackId = trackId,
                                 accessRightKey = accessRightKey,
                                 outputs = outputs,
-                                sessionCookie = sessionCookie
+                                sessionCookie = mergedCookie
                             )
                             if (hlsResult != null) {
                                 resolvedStreamUrl = hlsResult.first
-                                domandCookie = hlsResult.second
+                                domandCookie = listOf(mergedCookie, hlsResult.second)
+                                    .filter { it.isNotBlank() }
+                                    .joinToString("; ")
                             }
                         }
                     }
@@ -418,6 +429,8 @@ class NicoApiClient {
             .header("X-Frontend-Id", "6")
             .header("X-Frontend-Version", "0")
             .header("X-Request-With", "https://www.nicovideo.jp")
+            .header("Origin", "https://www.nicovideo.jp")
+            .header("Referer", "https://www.nicovideo.jp/watch/$videoId")
             .header("X-Access-Right-Key", accessRightKey)
             .post(payload.toRequestBody("application/json".toMediaType()))
 
